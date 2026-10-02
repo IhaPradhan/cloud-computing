@@ -1,18 +1,26 @@
 """
 End-to-End Pipeline Evaluation
-Member 3: Agent Intelligence + Security
+Member 3: Agent Intelligence + Security (Integrated with Member 2)
 
 Evaluates the complete pipeline against:
 1. Attack events
 2. Normal events
 
 Pipeline:
-Investigation → Risk → Response → Supervisor
+Detection → Investigation → Risk → Response → Supervisor
 """
 
 import csv
 from pathlib import Path
 from collections import Counter
+
+# Import Detection
+try:
+    from detection_agent import DetectionAgent
+    detector = DetectionAgent()
+except ImportError:
+    detector = None
+    print("Warning: DetectionAgent not found.")
 
 from investigation_agent import investigate_event
 from risk_agent import assess_risk
@@ -35,6 +43,10 @@ NORMAL_LOGS = PROJECT_ROOT / "data" / "normal_logs.csv"
 # ---------------------------------------------------------
 
 def process_event(event):
+    
+    detection = None
+    if detector:
+        detection = detector.analyze(event)
 
     investigation = investigate_event(event)
 
@@ -58,6 +70,7 @@ def process_event(event):
 
     return {
         "event": event,
+        "detection": detection,
         "investigation": investigation,
         "risk": risk,
         "response": response,
@@ -84,6 +97,12 @@ def evaluate_dataset(events, dataset_name):
     results = [
         process_event(event)
         for event in events
+    ]
+    
+    detections = [
+        result["detection"]
+        for result in results
+        if result.get("detection") is not None
     ]
 
     investigations = [
@@ -158,18 +177,10 @@ def evaluate_dataset(events, dataset_name):
     print("=" * 65)
 
     print(f"\nTotal events:        {len(events)}")
-
-    print(
-        f"Suspicious events:   {suspicious_events}"
-    )
-
-    print(
-        f"Unknown events:      {unknown_events}"
-    )
-
-    print(
-        f"Average risk score:  {average_risk:.2f}"
-    )
+    print(f"ML Detections (M2):  {len(detections)}")
+    print(f"Suspicious (M3):     {suspicious_events}")
+    print(f"Unknown events:      {unknown_events}")
+    print(f"Average risk score:  {average_risk:.2f}")
 
     print("\nIncident Types:")
     print(incident_types)
@@ -180,16 +191,12 @@ def evaluate_dataset(events, dataset_name):
     print("\nSupervisor Decisions:")
     print(supervisor_decisions)
 
-    print(
-        f"\nApproved actions:    {approved_actions}"
-    )
-
-    print(
-        f"Rejected actions:    {rejected_actions}"
-    )
+    print(f"\nApproved actions:    {approved_actions}")
+    print(f"Rejected actions:    {rejected_actions}")
 
     return {
         "results": results,
+        "ml_detections": len(detections),
         "incident_types": incident_types,
         "severities": severities,
         "supervisor_decisions": supervisor_decisions,
@@ -221,6 +228,8 @@ def evaluate_attack_scenarios(results):
             for result in results
             if result["event"].get("scenario") == scenario
         ]
+        
+        ml_caught = len([r for r in scenario_results if r.get("detection") is not None])
 
         scores = [
             result["risk"]["risk_score"]
@@ -240,30 +249,13 @@ def evaluate_attack_scenarios(results):
         print(f"\n{scenario}")
         print("-" * 65)
 
-        print(
-            f"Events:              {len(scenario_results)}"
-        )
-
-        print(
-            f"Average risk:        "
-            f"{sum(scores) / len(scores):.2f}"
-        )
-
-        print(
-            f"Min risk:            {min(scores)}"
-        )
-
-        print(
-            f"Max risk:            {max(scores)}"
-        )
-
-        print(
-            f"Incident types:      {incidents}"
-        )
-
-        print(
-            f"Severity:            {severities}"
-        )
+        print(f"Events:              {len(scenario_results)}")
+        print(f"ML Detected:         {ml_caught}/{len(scenario_results)} ({(ml_caught/len(scenario_results))*100:.1f}%)")
+        print(f"Average risk:        {sum(scores) / len(scores):.2f}")
+        print(f"Min risk:            {min(scores)}")
+        print(f"Max risk:            {max(scores)}")
+        print(f"Incident types:      {incidents}")
+        print(f"Severity:            {severities}")
 
 
 # ---------------------------------------------------------
@@ -272,75 +264,26 @@ def evaluate_attack_scenarios(results):
 
 if __name__ == "__main__":
 
-    # -----------------------------------------------------
-    # LOAD DATA
-    # -----------------------------------------------------
+    attack_events = load_events(ATTACK_LOGS)
+    normal_events = load_events(NORMAL_LOGS)
 
-    attack_events = load_events(
-        ATTACK_LOGS
-    )
-
-    normal_events = load_events(
-        NORMAL_LOGS
-    )
-
-    # -----------------------------------------------------
-    # ATTACK DATASET
-    # -----------------------------------------------------
-
-    attack_summary = evaluate_dataset(
-        attack_events,
-        "ATTACK"
-    )
-
-    evaluate_attack_scenarios(
-        attack_summary["results"]
-    )
-
-    # -----------------------------------------------------
-    # NORMAL DATASET
-    # -----------------------------------------------------
-
-    normal_summary = evaluate_dataset(
-        normal_events,
-        "NORMAL"
-    )
-
-    # -----------------------------------------------------
-    # FINAL SUMMARY
-    # -----------------------------------------------------
+    attack_summary = evaluate_dataset(attack_events, "ATTACK")
+    evaluate_attack_scenarios(attack_summary["results"])
+    normal_summary = evaluate_dataset(normal_events, "NORMAL")
 
     print("\n" + "=" * 65)
     print("FINAL PIPELINE SUMMARY")
     print("=" * 65)
 
-    print(
-        f"\nAttack events:       {len(attack_events)}"
-    )
+    print(f"\nAttack events:       {len(attack_events)}")
+    print(f"Attack ML Detected:  {attack_summary['ml_detections']}")
+    print(f"Attack unknown:      {attack_summary['unknown_events']}")
 
-    print(
-        f"Attack unknown:      "
-        f"{attack_summary['unknown_events']}"
-    )
+    print(f"\nNormal events:       {len(normal_events)}")
+    print(f"Normal ML False Pos: {normal_summary['ml_detections']}")
+    print(f"Normal suspicious:   {normal_summary['suspicious_events']}")
 
-    print(
-        f"Normal events:       {len(normal_events)}"
-    )
-
-    print(
-        f"Normal suspicious:   "
-        f"{normal_summary['suspicious_events']}"
-    )
-
-    print(
-        f"\nAttack avg risk:     "
-        f"{attack_summary['average_risk']:.2f}"
-    )
-
-    print(
-        f"Normal avg risk:     "
-        f"{normal_summary['average_risk']:.2f}"
-    )
+    print(f"\nAttack avg risk:     {attack_summary['average_risk']:.2f}")
+    print(f"Normal avg risk:     {normal_summary['average_risk']:.2f}")
 
     print("\nPipeline evaluation complete.")
-
